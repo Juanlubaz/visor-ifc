@@ -3,22 +3,123 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TEST PARAMETRO</title>
-</head>
-<body>
-  <h2>Prueba de lectura de parámetro</h2>
-  <p>Modelo recibido:</p>
-  <pre id="out">---</pre>
+  <title>Visor IFC</title>
 
-  <script>
-    function getParam(name) {
-      const url = new URL(window.location.href);
-      return url.searchParams.get(name);
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#000; color:#fff; font-family:Arial; }
+    #viewer { width:100%; height:100%; display:block; }
+
+    #panel {
+      position:fixed; top:10px; left:10px;
+      background:rgba(0,0,0,0.6);
+      padding:10px 14px; border-radius:8px;
+      font-size:14px; z-index:10;
     }
+    #status { margin-top:6px; font-size:12px; opacity:0.8; }
+    #bar { width:200px; height:6px; background:#333; margin-top:6px; border-radius:4px; overflow:hidden; }
+    #fill { width:0%; height:100%; background:#0f0; }
+  </style>
+</head>
 
-    const modelo = getParam("modelo");
+<body>
+  <canvas id="viewer"></canvas>
 
-    document.getElementById("out").textContent = modelo ?? "(sin parámetro)";
-  </script>
+  <div id="panel">
+    Archivo: <span id="fileName">—</span>
+    <div id="status">Esperando…</div>
+    <div id="bar"><div id="fill"></div></div>
+  </div>
+
+<script type="module">
+  import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.module.js";
+  import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/controls/OrbitControls.js";
+  import { IFCLoader } from "https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/loaders/IFCLoader.js";
+
+  const $ = id => document.getElementById(id);
+
+  function getParam(name) {
+    return new URL(window.location.href).searchParams.get(name);
+  }
+
+  const modelo = getParam("modelo");
+
+  $("fileName").textContent = modelo ? modelo : "(no recibido)";
+
+  if (!modelo) {
+    $("status").textContent = "Falta parámetro ?modelo=archivo.ifc";
+    throw new Error("No modelo");
+  }
+
+  // --- THREE JS ---
+  const renderer = new THREE.WebGLRenderer({ canvas: $("viewer"), antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+
+  const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 2000);
+  camera.position.set(10, 10, 10);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  const ambient = new THREE.AmbientLight(0xffffff, 1.2);
+  scene.add(ambient);
+
+  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+  dir.position.set(10,20,10);
+  scene.add(dir);
+
+  const loader = new IFCLoader();
+  loader.ifcManager.setWasmPath("https://cdn.jsdelivr.net/npm/web-ifc@0.0.46/");
+
+  let model = null;
+
+  loader.load(
+    modelo,
+    function (ifc) {
+      model = ifc;
+      scene.add(ifc);
+
+      const box = new THREE.Box3().setFromObject(ifc);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3()).length();
+
+      ifc.position.sub(center);
+
+      camera.position.set(size, size, size);
+      controls.target.set(0, 0, 0);
+
+      $("status").textContent = "Modelo cargado";
+      $("fill").style.width = "100%";
+    },
+    function (xhr) {
+      if (xhr.lengthComputable) {
+        const pct = (xhr.loaded / xhr.total) * 100;
+        $("fill").style.width = pct + "%";
+        $("status").textContent = "Cargando: " + pct.toFixed(1) + "%";
+      }
+    },
+    function (err) {
+      console.error(err);
+      $("status").textContent = "❌ Error cargando IFC";
+    }
+  );
+
+  function loop() {
+    requestAnimationFrame(loop);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  loop();
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+</script>
+
 </body>
 </html>
