@@ -1,386 +1,166 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { FileText, Download, Eye, Trash2, AlertCircle, CheckCircle, Loader } from 'lucide-react';
-
-const IFCNFCViewer = () => {
-  const [fileData, setFileData] = useState(null);
-  const [fileName, setFileName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [viewing, setViewing] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [detectedUrl, setDetectedUrl] = useState('');
-  const fileDataRef = useRef(null);
-
-  // Detectar si venimos de una URL de Google Drive
-  useEffect(() => {
-    const currentUrl = window.location.href;
-    
-    // Detectar si la URL actual es de Google Drive
-    if (currentUrl.includes('drive.google.com/file/d/')) {
-      setDetectedUrl(currentUrl);
-      handleLoadFile(currentUrl);
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Visor IFC - Juanlubaz</title>
+  <style>
+    :root { --ui-bg: rgba(0,0,0,0.6); --ui-fg: #fff; }
+    html,body { height:100%; margin:0; font-family:Arial,Helvetica,sans-serif; background:#0b0b0b; color:var(--ui-fg); }
+    #viewer { width:100%; height:100vh; display:block; }
+    #ui {
+      position:fixed; left:12px; top:12px; z-index:20;
+      background:var(--ui-bg); color:var(--ui-fg); padding:8px 10px; border-radius:8px;
+      font-size:13px; backdrop-filter: blur(6px);
     }
-    // O si viene como parámetro
-    else {
-      const params = new URLSearchParams(window.location.search);
-      const fileParam = params.get('file');
-      if (fileParam) {
-        setDetectedUrl(fileParam);
-        handleLoadFile(fileParam);
+    #status { font-size:12px; opacity:0.95; }
+    #loaderBar { width:180px; height:6px; background:rgba(255,255,255,0.08); margin-top:8px; border-radius:4px; overflow:hidden; }
+    #loaderFill { width:0%; height:100%; background:rgba(255,255,255,0.28); transition:width 180ms linear; }
+    a.small { color: #cfe; text-decoration:none; margin-left:8px; font-size:12px; }
+    #help { position:fixed; right:12px; bottom:12px; background:var(--ui-bg); padding:8px 10px; border-radius:8px; font-size:13px; }
+  </style>
+</head>
+<body>
+  <canvas id="viewer"></canvas>
+
+  <div id="ui">
+    <div id="status">Cargando visor…</div>
+    <div id="loaderBar"><div id="loaderFill"></div></div>
+    <div style="margin-top:6px;font-size:12px;opacity:0.9">Archivo: <span id="fname">—</span></div>
+  </div>
+
+  <div id="help">Usa dos dedos (móvil) o ratón: girar / desplazar / zoom</div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.module.js";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/controls/OrbitControls.js";
+    import { IFCLoader } from "https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/loaders/IFCLoader.js";
+
+    // --- Utils ---
+    const $ = id => document.getElementById(id);
+    function getParam(name) {
+      const u = new URL(location.href);
+      return u.searchParams.get(name);
+    }
+    function setStatus(text) { $("status").textContent = text; }
+
+    // --- Scene / Renderer / Camera ---
+    const canvas = $("viewer");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0b0b);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(10, 10, 12);
+
+    // Lights
+    const ambient = new THREE.AmbientLight(0xffffff, 0.9);
+    scene.add(ambient);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+    dir.position.set(10, 20, 10);
+    scene.add(dir);
+
+    // Controls
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 0.1;
+    controls.maxDistance = 500;
+
+    // IFC Loader
+    const loader = new IFCLoader();
+    // Web-IFC wasm (ruta pública CDN)
+    loader.ifcManager.setWasmPath("https://cdn.jsdelivr.net/npm/web-ifc@0.0.46/");
+
+    let currentModel = null;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight, false);
+    });
+
+    // --- Loading UI helpers ---
+    function setProgress(pct) {
+      const w = Math.max(0, Math.min(100, Math.round(pct)));
+      $("loaderFill").style.width = w + "%";
+    }
+
+    // --- Load model from URL param ---
+    const modeloParam = getParam("modelo") || "TSP3-ST-004-PCK001-S.ifc";
+    $("fname").textContent = modeloParam;
+
+    // Security: prevent directory traversal
+    if (modeloParam.includes("..")) {
+      setStatus("Nombre de archivo inválido");
+      console.error("Nombre de archivo inválido:", modeloParam);
+      throw new Error("Invalid filename");
+    }
+
+    async function loadIfcModel(filename) {
+      setStatus("Cargando archivo: " + filename);
+      setProgress(5);
+
+      // Remove previous model
+      if (currentModel) {
+        scene.remove(currentModel);
+        currentModel.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) { if (Array.isArray(c.material)) c.material.forEach(m => m.dispose()); else c.material.dispose(); } });
+        currentModel = null;
       }
+
+      // loader.load supports same-origin files (GitHub Pages serves them from same repo)
+      loader.load(
+        filename,
+        (ifcModel) => {
+          currentModel = ifcModel;
+          scene.add(ifcModel);
+
+          // Center & scale
+          const box = new THREE.Box3().setFromObject(ifcModel);
+          const center = new THREE.Vector3();
+          box.getCenter(center);
+          ifcModel.position.x += (ifcModel.position.x - center.x);
+          ifcModel.position.y += (ifcModel.position.y - center.y);
+          ifcModel.position.z += (ifcModel.position.z - center.z);
+
+          const size = box.getSize(new THREE.Vector3()).length();
+          const dist = size * 1.8;
+          camera.position.set(dist, dist, dist);
+          camera.lookAt(center);
+          controls.target.copy(center);
+          controls.update();
+
+          setProgress(100);
+          setStatus("Modelo cargado correctamente");
+        },
+        (xhr) => {
+          // Progress: sometimes xhr.total is unknown
+          let pct = 0;
+          try { pct = (xhr.loaded / (xhr.total || (xhr.loaded + 1))) * 90; } catch(e) { pct = 50; }
+          setProgress(pct);
+        },
+        (err) => {
+          console.error("Error cargando IFC:", err);
+          setStatus("Error: no se pudo cargar el IFC (comprueba nombre y permisos).");
+          setProgress(0);
+        }
+      );
     }
 
-    // Limpiar datos al cerrar/recargar la página
-    const cleanup = () => {
-      if (fileDataRef.current) {
-        fileDataRef.current = null;
-        setFileData(null);
-      }
-    };
-
-    window.addEventListener('beforeunload', cleanup);
-    return () => {
-      cleanup();
-      window.removeEventListener('beforeunload', cleanup);
-    };
-  }, []);
-
-  // Convertir URL de Google Drive de "view" a "download"
-  const convertDriveUrl = (url) => {
-    // Formato: https://drive.google.com/file/d/FILE_ID/view?usp=drive_link
-    // Convertir a: https://drive.google.com/uc?export=download&id=FILE_ID
-    const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-    if (match) {
-      return `https://drive.google.com/uc?export=download&id=${match[1]}`;
-    }
-    return url;
-  };
-
-  const handleLoadFile = async (url) => {
-    if (!url) return;
-    
-    setLoading(true);
-    setError('');
-    setDownloadProgress(0);
-
-    try {
-      const downloadUrl = convertDriveUrl(url);
-      
-      // Simular progreso de descarga
-      const progressInterval = setInterval(() => {
-        setDownloadProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 200);
-
-      const response = await fetch(downloadUrl, {
-        method: 'GET',
-        credentials: 'include'
-      });
-
-      clearInterval(progressInterval);
-
-      if (!response.ok) {
-        throw new Error('Error al descargar el archivo. Verifica que tengas permisos de acceso.');
-      }
-
-      setDownloadProgress(95);
-      
-      // Leer el archivo como texto
-      const text = await response.text();
-      
-      setDownloadProgress(100);
-
-      // Extraer nombre del archivo si está disponible
-      const contentDisposition = response.headers.get('content-disposition');
-      let name = 'modelo.ifc';
-      if (contentDisposition) {
-        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(contentDisposition);
-        if (matches && matches[1]) {
-          name = matches[1].replace(/['"]/g, '');
-        }
-      }
-
-      // Almacenar en memoria (no en disco)
-      fileDataRef.current = text;
-      setFileData(text);
-      setFileName(name);
-      setViewing(true);
-
-    } catch (err) {
-      setError(err.message || 'Error al cargar el archivo');
-      console.error('Error:', err);
-    } finally {
-      setLoading(false);
-      setDownloadProgress(0);
-    }
-  };
-
-  const handleCloseViewer = () => {
-    // Limpiar datos de memoria
-    fileDataRef.current = null;
-    setFileData(null);
-    setViewing(false);
-    setFileName('');
-    
-    // Intentar cerrar la ventana/pestaña
-    if (window.opener) {
-      window.close();
-    } else {
-      // Si no se puede cerrar, mostrar mensaje
-      alert('Puedes cerrar esta pestaña de forma segura. El archivo ha sido eliminado de la memoria.');
-    }
-  };
-
-  const parseIFCBasicInfo = (ifcText) => {
-    try {
-      // Extraer información básica del IFC
-      const lines = ifcText.split('\n').slice(0, 100); // Primeras 100 líneas
-      
-      const info = {
-        version: '',
-        project: '',
-        site: '',
-        building: '',
-        elements: 0
-      };
-
-      lines.forEach(line => {
-        if (line.includes('FILE_SCHEMA')) {
-          const match = line.match(/\('(.+?)'\)/);
-          if (match) info.version = match[1];
-        }
-        if (line.includes('IFCPROJECT')) {
-          const match = line.match(/'([^']+)'/);
-          if (match) info.project = match[1];
-        }
-        if (line.includes('IFCSITE')) {
-          const match = line.match(/'([^']+)'/);
-          if (match) info.site = match[1];
-        }
-        if (line.includes('IFCBUILDING')) {
-          const match = line.match(/'([^']+)'/);
-          if (match) info.building = match[1];
-        }
-      });
-
-      // Contar elementos aproximados
-      info.elements = (ifcText.match(/IFC[A-Z]+/g) || []).length;
-
-      return info;
-    } catch (err) {
-      return null;
-    }
-  };
-
-  // Pantalla de carga inicial
-  if (loading && !viewing) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-24 h-24 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
-          <h2 className="text-2xl font-bold mb-2">Cargando archivo IFC...</h2>
-          {downloadProgress > 0 && (
-            <div className="mt-4">
-              <div className="w-64 h-2 bg-gray-700 rounded-full overflow-hidden mx-auto">
-                <div 
-                  className="h-full bg-blue-500 transition-all duration-300"
-                  style={{ width: `${downloadProgress}%` }}
-                ></div>
-              </div>
-              <p className="text-sm text-gray-400 mt-2">{downloadProgress}%</p>
-            </div>
-          )}
-          <p className="text-gray-400 mt-4">El archivo se está cargando en memoria...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Pantalla de error
-  if (error && !viewing) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 text-white flex items-center justify-center p-6">
-        <div className="max-w-lg">
-          <div className="bg-red-500/20 border border-red-500 rounded-xl p-6">
-            <div className="flex items-start gap-3 mb-4">
-              <AlertCircle className="flex-shrink-0 mt-0.5 text-red-400" size={24} />
-              <div>
-                <h2 className="text-xl font-bold mb-2">Error al cargar el archivo</h2>
-                <p className="text-gray-300">{error}</p>
-              </div>
-            </div>
-            <div className="bg-gray-800/50 rounded-lg p-4 mt-4">
-              <p className="text-sm text-gray-300 mb-2">Posibles soluciones:</p>
-              <ul className="text-sm text-gray-400 space-y-1 list-disc list-inside">
-                <li>Verifica que tienes permisos para ver el archivo</li>
-                <li>Asegúrate de estar autenticado en Google Drive</li>
-                <li>Comprueba que el enlace del archivo es correcto</li>
-                <li>Intenta abrir primero el archivo en Drive</li>
-              </ul>
-            </div>
-            {detectedUrl && (
-              <a 
-                href={detectedUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-4 inline-block bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-              >
-                Abrir en Google Drive
-              </a>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Vista del archivo
-  if (viewing && fileData) {
-    const ifcInfo = parseIFCBasicInfo(fileData);
-
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 text-white">
-        {/* Header */}
-        <div className="bg-gray-900/80 backdrop-blur-sm border-b border-gray-700 p-4 sticky top-0 z-10">
-          <div className="max-w-6xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                <FileText className="text-blue-400" size={20} />
-              </div>
-              <div>
-                <h2 className="font-semibold">{fileName}</h2>
-                <p className="text-sm text-gray-400">
-                  {(fileData.length / 1024).toFixed(2)} KB • En memoria (temporal)
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleCloseViewer}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors flex items-center gap-2 font-medium"
-            >
-              <Trash2 size={18} />
-              Cerrar y Eliminar
-            </button>
-          </div>
-        </div>
-
-        {/* Contenido principal */}
-        <div className="max-w-6xl mx-auto p-6 space-y-6">
-          {/* Vista previa del modelo */}
-          <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-700 p-8">
-            <div className="text-center">
-              <div className="w-32 h-32 bg-blue-500/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <Eye size={64} className="text-blue-400" />
-              </div>
-              <h3 className="text-2xl font-bold mb-4">Visor IFC 3D</h3>
-              <p className="text-gray-300 mb-6 max-w-2xl mx-auto">
-                El archivo IFC ha sido cargado correctamente en memoria. En una implementación completa, 
-                aquí se renderizaría el modelo 3D interactivo usando librerías como IFC.js o Three.js.
-              </p>
-              <div className="inline-flex items-center gap-2 bg-green-500/20 text-green-400 px-4 py-2 rounded-lg">
-                <CheckCircle size={18} />
-                <span className="text-sm font-medium">Archivo listo para visualizar</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Información del archivo */}
-          {ifcInfo && (
-            <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-700 p-6">
-              <h4 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <FileText size={20} className="text-blue-400" />
-                Información del modelo IFC
-              </h4>
-              <div className="grid md:grid-cols-2 gap-4">
-                {ifcInfo.version && (
-                  <div className="bg-gray-700/50 rounded-lg p-4">
-                    <p className="text-sm text-gray-400 mb-1">Versión IFC</p>
-                    <p className="font-medium">{ifcInfo.version}</p>
-                  </div>
-                )}
-                {ifcInfo.project && (
-                  <div className="bg-gray-700/50 rounded-lg p-4">
-                    <p className="text-sm text-gray-400 mb-1">Proyecto</p>
-                    <p className="font-medium">{ifcInfo.project}</p>
-                  </div>
-                )}
-                {ifcInfo.building && (
-                  <div className="bg-gray-700/50 rounded-lg p-4">
-                    <p className="text-sm text-gray-400 mb-1">Edificio</p>
-                    <p className="font-medium">{ifcInfo.building}</p>
-                  </div>
-                )}
-                <div className="bg-gray-700/50 rounded-lg p-4">
-                  <p className="text-sm text-gray-400 mb-1">Elementos detectados</p>
-                  <p className="font-medium">~{ifcInfo.elements}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Aviso de seguridad */}
-          <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-6">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="text-blue-400 flex-shrink-0 mt-1" size={20} />
-              <div>
-                <h4 className="font-semibold mb-2">Privacidad y seguridad garantizadas</h4>
-                <ul className="text-sm text-gray-300 space-y-1">
-                  <li>✓ El archivo se mantiene solo en memoria RAM del navegador</li>
-                  <li>✓ No se guarda en el almacenamiento del dispositivo</li>
-                  <li>✓ Se elimina automáticamente al cerrar esta ventana</li>
-                  <li>✓ Acceso controlado mediante permisos de Google Drive</li>
-                  <li>✓ Sin trazas ni historial en el dispositivo</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Pantalla de bienvenida (si no hay URL detectada)
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 text-white flex items-center justify-center p-6">
-      <div className="max-w-2xl w-full text-center">
-        <div className="w-20 h-20 bg-blue-500/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
-          <FileText size={40} className="text-blue-400" />
-        </div>
-        <h1 className="text-4xl font-bold mb-4">Visor IFC desde NFC</h1>
-        <p className="text-gray-300 text-lg mb-8">
-          Esta aplicación está lista para abrir archivos IFC desde etiquetas NFC
-        </p>
-        
-        <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-700 p-8 text-left">
-          <h3 className="font-semibold mb-4 flex items-center gap-2">
-            <AlertCircle size={18} className="text-blue-400" />
-            Instrucciones de uso:
-          </h3>
-          <ol className="text-sm text-gray-300 space-y-3 list-decimal list-inside">
-            <li>Graba en tu etiqueta NFC la URL directa del archivo de Google Drive</li>
-            <li>Formato: <code className="bg-gray-700 px-2 py-1 rounded text-xs">https://drive.google.com/file/d/ID/view</code></li>
-            <li>Al escanear el NFC, tu móvil abrirá el enlace de Drive</li>
-            <li>Configura tu móvil para que abra enlaces de Drive con esta aplicación</li>
-            <li>El archivo se cargará automáticamente y se mostrará aquí</li>
-          </ol>
-          
-          <div className="mt-6 p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
-            <p className="text-sm text-gray-300">
-              <strong>Alternativa más sencilla:</strong> Aloja esta aplicación y usa URLs como:<br/>
-              <code className="text-xs bg-gray-700 px-2 py-1 rounded mt-2 inline-block">
-                tu-dominio.com?file=URL_DEL_DRIVE
-              </code>
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default IFCNFCViewer;
+    // Start
+    loadIfcModel(modeloParam);
+  </script>
+</body>
+</html>
