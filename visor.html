@@ -57,10 +57,12 @@
       await viewer.IFC.loadIfcUrl(ruta);
     } catch (e) {
       fileNameDiv.textContent = "Error al cargar: " + e;
+      console.error(e);
     }
   }
 </script>
 
 </body>
 </html>
+
 
