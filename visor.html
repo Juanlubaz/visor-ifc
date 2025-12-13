@@ -1,129 +1,111 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Visor GLB</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Visor GLB</title>
 
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            width: 100%;
-            height: 100%;
-            background: #ffffff;
-            font-family: sans-serif;
-        }
-        #viewer {
-            width: 100%;
-            height: 100%;
-            background: #ffffff;
-        }
-        #filename {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background: #ffffffcc;
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-size: 14px;
-            z-index: 10;
-        }
-    </style>
+<style>
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #fff;
+}
+#viewer {
+    width: 100%;
+    height: 100%;
+}
+#filename {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: #ffffffcc;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: sans-serif;
+    z-index: 10;
+}
+</style>
+
 <script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.152.2/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://unpkg.com/three@0.152.2/examples/js/controls/OrbitControls.js"></script>
-
 </head>
-<body>
 
+<body>
 <div id="filename">Cargando...</div>
 <div id="viewer"></div>
 
 <script>
-    function getModelName() {
-        const params = new URLSearchParams(window.location.search);
-        return params.get("modelo");
+const params = new URLSearchParams(window.location.search);
+const fileName = params.get("modelo");
+const label = document.getElementById("filename");
+
+if (!fileName) {
+    label.textContent = "Falta ?modelo=archivo.glb";
+    throw new Error("No model specified");
+}
+
+label.textContent = fileName;
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+    50,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    100000
+);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.getElementById("viewer").appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+dirLight.position.set(10, 10, 10);
+scene.add(dirLight);
+
+const loader = new THREE.GLTFLoader();
+loader.load(
+    "./" + fileName,
+    (gltf) => {
+        scene.add(gltf.scene);
+
+        const box = new THREE.Box3().setFromObject(gltf.scene);
+        const size = box.getSize(new THREE.Vector3()).length();
+        const center = box.getCenter(new THREE.Vector3());
+
+        gltf.scene.position.sub(center);
+
+        camera.position.set(size, size, size);
+        camera.lookAt(0, 0, 0);
+
+        controls.target.set(0, 0, 0);
+        controls.update();
+    },
+    undefined,
+    (err) => {
+        label.textContent = "Error cargando GLB";
+        console.error(err);
     }
+);
 
-    const fileName = getModelName();
-    const label = document.getElementById("filename");
+function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+}
+animate();
 
-    if (!fileName) {
-        label.textContent = "Error: falta parámetro ?modelo=";
-    } else {
-        label.textContent = fileName;
-    }
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-        50,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        1000
-    );
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-
-    document.getElementById("viewer").appendChild(renderer.domElement);
-
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    camera.position.set(4, 4, 4);
-    controls.update();
-
-    const light1 = new THREE.DirectionalLight(0xffffff, 1);
-    light1.position.set(5, 5, 5);
-    scene.add(light1);
-
-    const light2 = new THREE.AmbientLight(0xffffff, 0.5);
-    scene.add(light2);
-
-    if (fileName) {
-        const loader = new THREE.GLTFLoader();
-        const url = "./" + fileName;
-
-        loader.load(
-            url,
-            function (gltf) {
-                scene.add(gltf.scene);
-
-                // centrado automático
-                const box = new THREE.Box3().setFromObject(gltf.scene);
-                const size = box.getSize(new THREE.Vector3()).length();
-                const center = box.getCenter(new THREE.Vector3());
-
-                gltf.scene.position.sub(center);
-
-                camera.position.set(size, size, size);
-                controls.update();
-            },
-            function (xhr) {
-                label.textContent = fileName + " (" + ((xhr.loaded / xhr.total) * 100).toFixed(0) + "%)";
-            },
-            function (error) {
-                label.textContent = "Error al cargar GLB";
-                console.error(error);
-            }
-        );
-    }
-
-    function animate() {
-        requestAnimationFrame(animate);
-        renderer.render(scene, camera);
-    }
-
-    animate();
-
-    window.addEventListener("resize", () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+});
 </script>
-
 </body>
 </html>
-
-
