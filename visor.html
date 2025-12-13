@@ -94,9 +94,7 @@
                 const size = box.getSize(new THREE.Vector3()).length();
                 const center = box.getCenter(new THREE.Vector3());
 
-                gltf.scene.position.x += (gltf.scene.position.x - center.x);
-                gltf.scene.position.y += (gltf.scene.position.y - center.y);
-                gltf.scene.position.z += (gltf.scene.position.z - center.z);
+                gltf.scene.position.sub(center);
 
                 camera.position.set(size, size, size);
                 controls.update();
@@ -127,5 +125,6 @@
 
 </body>
 </html>
+
 
 
